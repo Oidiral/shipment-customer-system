@@ -1,0 +1,22 @@
+# IDE
+.idea/
+.vscode/
+
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/bin/
+/dist/
+
+# Test coverage
+*.out
+coverage.txt
+
+# Vendor
+/vendor/
+
+# OS
+.DS_Store

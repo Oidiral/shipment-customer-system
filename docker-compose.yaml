@@ -1,0 +1,102 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: shipments
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.51
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686"
+      - "4317"
+    networks:
+      - app-network
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.91.0
+    command: [ "--config=/etc/otel-collector-config.yaml" ]
+    volumes:
+      - ./config/otel-collector.yaml:/etc/otel-collector-config.yaml
+    depends_on:
+      - jaeger
+    networks:
+      - app-network
+
+  envoy:
+    image: envoyproxy/envoy:v1.28.0
+    command: [ "-c", "/etc/envoy/envoy.yaml", "--log-level", "info" ]
+    ports:
+      - "8080:8080"
+    depends_on:
+      - shipment-service
+      - customer-service
+      - otel-collector
+    volumes:
+      - ./config/envoy.yaml:/etc/envoy/envoy.yaml
+    networks:
+      - app-network
+
+  shipment-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.shipment
+    container_name: shipment-service
+    environment:
+      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/shipments?sslmode=disable
+      - OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector:4317
+      - CUSTOMER_SERVICE_TARGET=envoy:9090
+      - HTTP_PORT=8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    networks:
+      - app-network
+
+  customer-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.customer
+    container_name: customer-service
+    environment:
+      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/shipments?sslmode=disable
+      - OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector:4317
+      - GRPC_PORT=9090
+    depends_on:
+      postgres:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    networks:
+      - app-network
+
+  migrate:
+    image: migrate/migrate:v4.15.1
+    volumes:
+      - ./migrations:/migrations
+    command: [ "-path", "/migrations", "-database", "postgres://postgres:postgres@postgres:5432/shipments?sslmode=disable", "up" ]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: on-failure
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
